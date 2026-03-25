@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Memorama VR — Administración de Empresas</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/aframe/1.5.0/aframe.min.js"></script>
+  <style>
+    body { margin: 0; background: #000; }
+    #ui-overlay {
+      position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,.75); color: #f0c040;
+      font-family: monospace; font-size: 14px; padding: 8px 20px;
+      border-radius: 20px; border: 1px solid #f0c040;
+      pointer-events: none; z-index: 999; white-space: nowrap;
+      display: flex; gap: 20px;
+    }
+    #ui-overlay span { color: #fff; }
+  </style>
+</head>
+<body>
+
+<div id="ui-overlay">
+  🎯 Intentos: <span id="moves-ui">0</span> &nbsp;|&nbsp;
+  ✅ Pares: <span id="pairs-ui">0</span> &nbsp;|&nbsp;
+  ⏱ <span id="timer-ui">0:00</span>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     A-FRAME COMPONENTS
+═══════════════════════════════════════════ -->
+<script>
+// ── Game Data ──────────────────────────────────────────────────────────────
+const PAIRS = [
+  { id:1,  term:"FODA",               def:"Análisis de Fortalezas, Oportunidades, Debilidades y Amenazas" },
+  { id:2,  term:"Misión",             def:"Razón de ser de la empresa: qué hace y para quién" },
+  { id:3,  term:"Visión",             def:"Imagen futura deseada de la organización a largo plazo" },
+  { id:4,  term:"KPI",                def:"Indicador clave de desempeño para medir el logro de objetivos" },
+  { id:5,  term:"Balance General",    def:"Estado financiero: activos, pasivos y capital en un momento dado" },
+  { id:6,  term:"Flujo de Caja",      def:"Movimiento de entradas y salidas de efectivo en un período" },
+  { id:7,  term:"ROI",                def:"Retorno sobre la inversión relativa al costo invertido" },
+  { id:8,  term:"Punto de Equilibrio",def:"Ventas donde ingresos igualan exactamente los costos totales" },
+  { id:9,  term:"Segmentación",       def:"División del mercado en grupos con características similares" },
+  { id:10, term:"Propuesta de Valor", def:"Beneficio único que diferencia a la empresa de la competencia" },
+  { id:11, term:"Embudo de Ventas",   def:"Proceso que guía al cliente desde el conocimiento hasta la compra" },
+  { id:12, term:"Posicionamiento",    def:"Lugar que ocupa una marca en la mente del consumidor objetivo" },
+];
+
+// ── Card Flip Component ────────────────────────────────────────────────────
+AFRAME.registerComponent('memory-card', {
+  schema: {
+    pairId:  { type: 'int',    default: 0 },
+    cardType:{ type: 'string', default: 'term' },  // 'term' | 'def'
+    label:   { type: 'string', default: '' },
+  },
+
+  init() {
+    this.isFlipped  = false;
+    this.isMatched  = false;
+    this.isAnimating= false;
+
+    // Build visual parts
+    this.buildCard();
+
+    // Interaction
+    this.el.addEventListener('click',      () => this.onClick());
+    this.el.addEventListener('mouseenter', () => this.onHover(true));
+    this.el.addEventListener('mouseleave', () => this.onHover(false));
+    this.el.setAttribute('class', 'clickable');
+  },
+
+  buildCard() {
+    const el = this.el;
+    const isTerm = this.data.cardType === 'term';
+
+    // ── Back face (face-down) ──
+    const back = document.createElement('a-entity');
+    back.setAttribute('geometry', 'primitive:box; width:0.7; height:1.0; depth:0.01');
+    back.setAttribute('material', `color:#13131a; metalness:0.3; roughness:0.6; side:front`);
+    back.setAttribute('position', '0 0 0');
+    back.classList.add('back-face');
+
+    // Back pattern lines
+    for (let i = -3; i <= 3; i++) {
+      const line = document.createElement('a-entity');
+      line.setAttribute('geometry', 'primitive:plane; width:0.68; height:0.003');
+      line.setAttribute('material', 'color:#2a2a3a; side:front');
+      line.setAttribute('position', `0 ${i * 0.12} 0.006`);
+      back.appendChild(line);
+    }
+
+    // Back logo "A"
+    const logo = document.createElement('a-text');
+    logo.setAttribute('value', 'A');
+    logo.setAttribute('color', '#f0c040');
+    logo.setAttribute('align', 'center');
+    logo.setAttribute('width', '1.2');
+    logo.setAttribute('position', '0 0 0.007');
+    logo.setAttribute('font', 'https://cdn.aframe.io/fonts/Exo2Bold.fnt');
+    back.appendChild(logo);
+    el.appendChild(back);
+    this.backFace = back;
+
+    // ── Front face (face-up) ──
+    const front = document.createElement('a-entity');
+    front.setAttribute('geometry', 'primitive:box; width:0.7; height:1.0; depth:0.01');
+    front.setAttribute('material',
+      `color:${isTerm ? '#16213e' : '#0d1b2a'}; metalness:0.2; roughness:0.7; side:front`);
+    front.setAttribute('position', '0 0 0');
+    front.setAttribute('rotation', '0 180 0');
+    front.classList.add('front-face');
+
+    // Border glow plane
+    const border = document.createElement('a-entity');
+    border.setAttribute('geometry', 'primitive:plane; width:0.72; height:1.02');
+    border.setAttribute('material', `color:${isTerm ? '#f0c040' : '#40c0f0'}; opacity:0.6; side:front`);
+    border.setAttribute('position', '0 0 -0.006');
+    front.appendChild(border);
+
+    // Tag label
+    const tag = document.createElement('a-text');
+    tag.setAttribute('value', isTerm ? 'TÉRMINO' : 'DEFINICIÓN');
+    tag.setAttribute('color', isTerm ? '#f0c040' : '#40c0f0');
+    tag.setAttribute('align', 'center');
+    tag.setAttribute('width', '1.2');
+    tag.setAttribute('position', '0 0.38 0.007');
+    tag.setAttribute('font', 'https://cdn.aframe.io/fonts/Exo2Bold.fnt');
+    front.appendChild(tag);
+
+    // Divider
+    const div = document.createElement('a-entity');
+    div.setAttribute('geometry', 'primitive:plane; width:0.55; height:0.003');
+    div.setAttribute('material', `color:${isTerm ? '#f0c040' : '#40c0f0'}; opacity:0.4; side:front`);
+    div.setAttribute('position', '0 0.28 0.007');
+    front.appendChild(div);
+
+    // Main text — wrap long text manually
+    const label = this.data.label;
+    const wrapped = wrapText(label, 18);
+    const textEl = document.createElement('a-text');
+    textEl.setAttribute('value', wrapped);
+    textEl.setAttribute('color', '#e8e8f0');
+    textEl.setAttribute('align', 'center');
+    textEl.setAttribute('width', isTerm ? '1.6' : '1.1');
+    textEl.setAttribute('position', '0 0 0.007');
+    textEl.setAttribute('baseline', 'center');
+    textEl.setAttribute('wrap-count', '20');
+    front.appendChild(textEl);
+
+    el.appendChild(front);
+    this.frontFace = front;
+  },
+
+  onClick() {
+    if (this.isMatched || this.isAnimating) return;
+    window.gameController.onCardClick(this);
+  },
+
+  onHover(entering) {
+    if (this.isMatched || this.isFlipped) return;
+    const scale = entering ? '1.06 1.06 1.06' : '1 1 1';
+    this.el.setAttribute('animation__hover', `property:scale; to:${scale}; dur:150; easing:easeOutQuad`);
+  },
+
+  flip(callback) {
+    this.isAnimating = true;
+    this.isFlipped = true;
+    this.el.setAttribute('animation__flip', 'property:rotation; to:0 180 0; dur:400; easing:easeInOutQuad');
+    setTimeout(() => {
+      this.isAnimating = false;
+      if (callback) callback();
+    }, 420);
+  },
+
+  unflip(callback) {
+    this.isAnimating = true;
+    this.isFlipped = false;
+    this.el.setAttribute('animation__flip', 'property:rotation; to:0 0 0; dur:400; easing:easeInOutQuad');
+    setTimeout(() => {
+      this.isAnimating = false;
+      if (callback) callback();
+    }, 420);
+  },
+
+  markMatched() {
+    this.isMatched = true;
+    // Green glow pulse
+    this.el.setAttribute('animation__match',
+      'property:scale; from:1 1 1; to:1.08 1.08 1.08; dir:alternate; loop:3; dur:200; easing:easeInOutSine');
+    // Update border color to green
+    const front = this.frontFace;
+    const border = front.querySelector('[geometry]');
+    setTimeout(() => {
+      front.setAttribute('material', 'color:#0d2a1a; metalness:0.2; roughness:0.7; side:front');
+      if (border) border.setAttribute('material', 'color:#40f0a0; opacity:0.8; side:front');
+    }, 50);
+  },
+});
+
+// ── Text wrap helper ──────────────────────────────────────────────────────
+function wrapText(text, maxLen) {
+  const words = text.split(' ');
+  const lines = [];
+  let current = '';
+  words.forEach(w => {
+    if ((current + ' ' + w).trim().length > maxLen) {
+      lines.push(current.trim());
+      current = w;
+    } else {
+      current = (current + ' ' + w).trim();
+    }
+  });
+  if (current) lines.push(current.trim());
+  return lines.join('\n');
+}
+
+// ── Game Controller ───────────────────────────────────────────────────────
+class GameController {
+  constructor() {
+    this.flipped  = [];   // up to 2 card components
+    this.matched  = new Set();
+    this.moves    = 0;
+    this.seconds  = 0;
+    this.locked   = false;
+    this.timerInterval = null;
+    this.cardComponents = [];
+  }
+
+  start() {
+    this.moves = 0; this.seconds = 0; this.flipped = []; this.matched = new Set(); this.locked = false;
+    clearInterval(this.timerInterval);
+    this.timerInterval = setInterval(() => {
+      this.seconds++;
+      const m = Math.floor(this.seconds/60);
+      const s = (this.seconds%60).toString().padStart(2,'0');
+      document.getElementById('timer-ui').textContent = `${m}:${s}`;
+    }, 1000);
+    this.updateUI();
+  }
+
+  onCardClick(cardComp) {
+    if (this.locked) return;
+    if (this.flipped.includes(cardComp)) return;
+    if (this.matched.has(cardComp)) return;
+
+    cardComp.flip();
+    this.flipped.push(cardComp);
+
+    if (this.flipped.length === 2) {
+      this.locked = true;
+      this.moves++;
+      this.updateUI();
+      setTimeout(() => this.checkMatch(), 600);
+    }
+  }
+
+  checkMatch() {
+    const [a, b] = this.flipped;
+    if (a.data.pairId === b.data.pairId && a.data.cardType !== b.data.cardType) {
+      a.markMatched();
+      b.markMatched();
+      this.matched.add(a);
+      this.matched.add(b);
+      this.flipped = [];
+      this.locked  = false;
+      document.getElementById('pairs-ui').textContent = this.matched.size / 2;
+      if (this.matched.size === this.cardComponents.length) this.win();
+    } else {
+      setTimeout(() => {
+        a.unflip();
+        b.unflip();
+        setTimeout(() => {
+          this.flipped = [];
+          this.locked  = false;
+        }, 420);
+      }, 400);
+    }
+  }
+
+  win() {
+    clearInterval(this.timerInterval);
+    // Show win message in VR
+    const winEl = document.getElementById('win-sign');
+    if (winEl) {
+      winEl.setAttribute('visible', true);
+      const m = Math.floor(this.seconds/60);
+      const s = (this.seconds%60).toString().padStart(2,'0');
+      const txt = document.getElementById('win-text');
+      if (txt) txt.setAttribute('value',
+        `¡GANASTE!\n${this.moves} intentos · ${m}:${s}`);
+    }
+  }
+
+  updateUI() {
+    document.getElementById('moves-ui').textContent = this.moves;
+    document.getElementById('pairs-ui').textContent = this.matched.size / 2;
+  }
+}
+
+window.gameController = new GameController();
+
+// ── Shuffle deck ──────────────────────────────────────────────────────────
+function buildDeck() {
+  const deck = [];
+  PAIRS.forEach(p => {
+    deck.push({ pairId: p.id, cardType: 'term', label: p.term });
+    deck.push({ pairId: p.id, cardType: 'def',  label: p.def  });
+  });
+  return deck.sort(() => Math.random() - .5);
+}
+</script>
+
+<!-- ═══════════════════════════════════════════
+     SCENE
+═══════════════════════════════════════════ -->
+<a-scene
+  background="color:#05050f"
+  renderer="antialias:true; colorManagement:true"
+  vr-mode-ui="enabled:true"
+  loading-screen="backgroundColor:#05050f; dotsColor:#f0c040"
+>
+
+  <!-- Assets -->
+  <a-assets>
+    <a-mixin id="card-hover" cursor-listener></a-mixin>
+  </a-assets>
+
+  <!-- ── Environment ──────────────────────────────── -->
+
+  <!-- Starfield -->
+  <a-entity id="stars"></a-entity>
+
+  <!-- Ground grid -->
+  <a-entity
+    geometry="primitive:plane; width:40; height:40"
+    material="color:#0a0a1a; wireframe:true; opacity:0.25"
+    rotation="-90 0 0"
+    position="0 -1.8 0">
+  </a-entity>
+
+  <!-- Ambient + directional light -->
+  <a-light type="ambient"     color="#112233" intensity="1.2"></a-light>
+  <a-light type="directional" color="#ffffff" intensity="0.8" position="2 4 3"></a-light>
+  <a-light type="point" color="#f0c040" intensity="0.5" position="0 3 -3"></a-light>
+  <a-light type="point" color="#40c0f0" intensity="0.3" position="-3 2 0"></a-light>
+
+  <!-- Header title -->
+  <a-text
+    value="MEMORAMA"
+    color="#f0c040"
+    align="center"
+    width="6"
+    position="0 2.6 -4"
+    font="https://cdn.aframe.io/fonts/Exo2Bold.fnt">
+  </a-text>
+  <a-text
+    value="Administración de Empresas"
+    color="#40c0f0"
+    align="center"
+    width="3.5"
+    position="0 2.1 -4"
+    font="https://cdn.aframe.io/fonts/Exo2Bold.fnt">
+  </a-text>
+
+  <!-- Hint text -->
+  <a-text
+    id="hint-text"
+    value="Apunta con el cursor y haz clic / gatillo para voltear"
+    color="#6a6a8a"
+    align="center"
+    width="3"
+    position="0 -1.5 -3.5"
+    font="https://cdn.aframe.io/fonts/Exo2Bold.fnt">
+  </a-text>
+
+  <!-- ── Card Grid ─────────────────────────────────
+       24 cards (12 pairs) in 6 columns × 4 rows
+       Laid out in a gentle arc around the player
+  ─────────────────────────────────────────────── -->
+  <a-entity id="card-container" position="0 0.6 -3.5"></a-entity>
+
+  <!-- ── Win Sign ──────────────────────────────── -->
+  <a-entity id="win-sign" visible="false" position="0 1.6 -3">
+    <a-entity
+      geometry="primitive:box; width:3.2; height:1.4; depth:0.05"
+      material="color:#051a0f; opacity:0.95">
+    </a-entity>
+    <a-entity
+      geometry="primitive:box; width:3.25; height:1.45; depth:0.04"
+      material="color:#40f0a0; opacity:0.7"
+      position="0 0 -0.01">
+    </a-entity>
+    <a-text
+      id="win-text"
+      value="¡GANASTE!"
+      color="#40f0a0"
+      align="center"
+      width="5"
+      position="0 0 0.04"
+      font="https://cdn.aframe.io/fonts/Exo2Bold.fnt">
+    </a-text>
+  </a-entity>
+
+  <!-- ── Camera + Cursor ────────────────────────── -->
+  <a-entity id="rig" position="0 0 2.5">
+    <a-camera>
+      <!-- Gaze / mouse cursor -->
+      <a-cursor
+        color="#f0c040"
+        fuse="false"
+        raycaster="objects:.clickable"
+        animation__click="property:scale; startEvents:click; from:0.1 0.1 0.1; to:1 1 1; dur:150"
+        animation__fusing="property:scale; startEvents:fusing; from:1 1 1; to:0.1 0.1 0.1; dur:1500"
+        animation__mouseleave="property:scale; startEvents:mouseleave; to:1 1 1; dur:150">
+      </a-cursor>
+    </a-camera>
+
+    <!-- Quest controller left -->
+    <a-entity
+      laser-controls="hand:left"
+      raycaster="objects:.clickable; far:20"
+      line="color:#40c0f0; opacity:0.7">
+    </a-entity>
+
+    <!-- Quest controller right -->
+    <a-entity
+      laser-controls="hand:right"
+      raycaster="objects:.clickable; far:20"
+      line="color:#f0c040; opacity:0.7">
+    </a-entity>
+  </a-entity>
+
+</a-scene>
+
+<!-- ═══════════════════════════════════════════
+     INIT — build cards after scene loads
+═══════════════════════════════════════════ -->
+<script>
+document.querySelector('a-scene').addEventListener('loaded', () => {
+  spawnCards();
+  window.gameController.start();
+  buildStars();
+});
+
+function spawnCards() {
+  const container = document.getElementById('card-container');
+  container.innerHTML = '';
+  window.gameController.cardComponents = [];
+
+  const deck = buildDeck(); // 24 cards
+  const COLS = 6;
+  const ROWS = 4;
+  const spacingX = 0.82;
+  const spacingY = 1.18;
+  const totalW = (COLS - 1) * spacingX;
+  const totalH = (ROWS - 1) * spacingY;
+
+  deck.forEach((data, i) => {
+    const col = i % COLS;
+    const row = Math.floor(i / COLS);
+
+    const x = col * spacingX - totalW / 2;
+    const y = -row * spacingY + totalH / 2;
+
+    // Slight arc: cards curve toward player
+    const arcAngle = (col - (COLS-1)/2) * 6; // degrees
+    const zOffset  = Math.abs(col - (COLS-1)/2) * 0.08;
+
+    const cardEl = document.createElement('a-entity');
+    cardEl.setAttribute('memory-card', {
+      pairId:   data.pairId,
+      cardType: data.cardType,
+      label:    data.label,
+    });
+    cardEl.setAttribute('position', `${x} ${y} ${-zOffset}`);
+    cardEl.setAttribute('rotation', `0 ${arcAngle} 0`);
+    container.appendChild(cardEl);
+
+    // Staggered entrance animation
+    cardEl.setAttribute('animation__enter',
+      `property:scale; from:0 0 0; to:1 1 1; dur:400; delay:${i*40}; easing:easeOutBack`);
+
+    // Register with controller
+    cardEl.addEventListener('loaded', () => {
+      const comp = cardEl.components['memory-card'];
+      if (comp) window.gameController.cardComponents.push(comp);
+    });
+  });
+}
+
+function buildStars() {
+  const stars = document.getElementById('stars');
+  for (let i = 0; i < 200; i++) {
+    const star = document.createElement('a-sphere');
+    const r = 0.015 + Math.random() * 0.025;
+    star.setAttribute('radius', r);
+    star.setAttribute('color', '#ffffff');
+    star.setAttribute('material', `opacity:${0.3 + Math.random()*0.6}; shader:flat`);
+    const theta = Math.random() * Math.PI * 2;
+    const phi   = Math.random() * Math.PI;
+    const dist  = 18 + Math.random() * 8;
+    star.setAttribute('position',
+      `${dist*Math.sin(phi)*Math.cos(theta)} ${dist*Math.cos(phi)} ${dist*Math.sin(phi)*Math.sin(theta)}`);
+    stars.appendChild(star);
+  }
+}
+</script>
+</body>
+</html>
